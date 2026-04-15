@@ -800,7 +800,9 @@ module.exports = {
 | 백엔드 | Python FastAPI | v0.111+ |
 | LLM 오케스트레이션 | LangChain | v1.2+ |
 | LLM 코어 | LangChain Core | v1.2+ |
-| OCR LLM | Upstage document-digitization-vision | - |
+| OCR (Step 1) | Upstage Document Digitization API (`document-parse` 모델) | - |
+| LLM 파싱 (Step 2) | ChatUpstage (`solar-pro` 모델) | - |
+| 비동기 HTTP | httpx | v0.27+ |
 | 이미지 처리 | Pillow / pdf2image | - |
 | 데이터 저장 | JSON 파일 | DB 미사용 |
 | 배포 | Vercel | - |
@@ -848,8 +850,7 @@ receipt-tracker/
 │     │     ├── expenses.py           # GET, DELETE, PUT /api/expenses
 │     │     └── summary.py            # GET /api/summary
 │     ├── services/
-│     │     ├── ocr_service.py        # LangChain + Upstage 연동 로직
-│     │     └── storage_service.py    # expenses.json 읽기/쓰기
+│     │     └── ocr.py                # Document Digitization API + ChatUpstage 2단계 파이프라인
 │     ├── data/
 │     │     └── expenses.json
 │     └── requirements.txt
@@ -895,9 +896,11 @@ receipt-tracker/
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
-langchain==0.2.0
-langchain-upstage==0.1.0
-pillow==10.3.0
+langchain==1.2.15
+langchain-core==1.2.29
+langchain-upstage==0.7.7
+httpx>=0.27.0
+pillow==10.4.0
 pdf2image==1.17.0
 python-dotenv==1.0.1
 ```
@@ -921,6 +924,12 @@ python-dotenv==1.0.1
 
 ```python
 # backend/main.py 핵심 구조
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))  # uvicorn backend.main:app 실행 시 경로 문제 해결
+
+from dotenv import load_dotenv
+load_dotenv()  # ※ 라우터 임포트 전에 호출해야 모듈 레벨 os.getenv()에 적용됨
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import upload, expenses, summary
@@ -940,35 +949,42 @@ app.include_router(summary.router, prefix="/api")
 | 2-2-2 | `save_expenses(data)` 함수 | 리스트 → `expenses.json` 쓰기 |
 | 2-2-3 | `append_expense(item)` 함수 | UUID 생성 후 리스트에 추가 저장 |
 
-#### 2-3. OCR 서비스 (`backend/services/ocr_service.py`)
+#### 2-3. OCR 서비스 (`backend/services/ocr.py`)
+
+**2단계 파이프라인으로 구현** (Vision LLM 단일 호출 방식 대비 정확도 향상):
 
 | # | 작업 | 내용 |
 |---|------|------|
-| 2-3-1 | 이미지 전처리 함수 | JPG/PNG → Base64, PDF → 이미지 변환 후 Base64 |
-| 2-3-2 | LangChain Chain 구성 | `ChatUpstage` + `PromptTemplate` + `JsonOutputParser` |
-| 2-3-3 | 시스템 프롬프트 작성 | JSON 스키마 명시, 한국어/영어 영수증 파싱 지시 |
-| 2-3-4 | `parse_receipt(file_bytes, content_type)` 함수 | 전처리 → LLM 호출 → JSON 반환 |
+| 2-3-1 | **Step 1** `_ocr_extract()` | Upstage Document Digitization API 비동기 호출 → Markdown/텍스트 추출 |
+| 2-3-2 | **Step 2** `_parse_llm_json()` | `ChatUpstage(solar-pro)` 로 추출 텍스트 → 구조화 JSON 변환 |
+| 2-3-3 | 시스템 프롬프트 작성 | JSON 스키마 명시, 순수 JSON만 출력하도록 지시 |
+| 2-3-4 | `parse_receipt(contents, content_type, filename)` | Step1 → Step2 → `expenses.json` append 저장 |
 
 ```python
-# 시스템 프롬프트 핵심 구조
-SYSTEM_PROMPT = """
-당신은 영수증 OCR 전문가입니다.
-이미지에서 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
+# Step 1: Upstage Document Digitization API 호출
+async def _ocr_extract(contents: bytes, filename: str) -> str:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "https://api.upstage.ai/v1/document-digitization",
+            headers={"Authorization": f"Bearer {api_key}"},
+            files={"document": (filename, contents)},
+            data={"model": "document-parse"},
+        )
+        response.raise_for_status()
+    # content.markdown > content.text > elements 순으로 텍스트 추출
+    return data.get("content", {}).get("markdown") or ...
 
-{
-  "store_name": "string",
-  "receipt_date": "YYYY-MM-DD",
-  "receipt_time": "HH:MM or null",
-  "category": "식료품|외식|교통|쇼핑|의료|기타",
-  "items": [{"name": "string", "quantity": int, "unit_price": int, "total_price": int}],
-  "subtotal": int,
-  "discount": int,
-  "tax": int,
-  "total_amount": int,
-  "payment_method": "string or null"
-}
-"""
+# Step 2: LLM으로 구조화 JSON 추출
+async def parse_receipt(contents, content_type, filename):
+    ocr_text = await _ocr_extract(contents, filename)  # Step 1
+    response = await llm.ainvoke([SystemMessage(SYSTEM_PROMPT),
+                                   HumanMessage(ocr_text)])  # Step 2
+    parsed = _parse_llm_json(response.content)  # ```json 블록 처리 포함
+    _append_to_file({**parsed, "id": uuid4(), ...})
+    return expense
 ```
+
+> **환경변수 주의**: `DATA_FILE_PATH` 기본값은 `"backend/data/expenses.json"` (루트 실행 기준). 각 라우터에서 `os.getenv()`를 함수 내부에서 호출해 env 로드 타이밍 문제 방지.
 
 #### 2-4. 업로드 라우터 (`backend/routers/upload.py`)
 

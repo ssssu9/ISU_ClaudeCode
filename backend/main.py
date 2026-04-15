@@ -1,10 +1,16 @@
+import sys
+import os
+
+# 'uvicorn backend.main:app' 실행 시 backend/ 디렉터리를 sys.path에 추가
+sys.path.insert(0, os.path.dirname(__file__))
+
+from dotenv import load_dotenv
+load_dotenv()  # 라우터 임포트 전에 실행해야 모듈 레벨 환경변수가 적용됨
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 
 from routers import upload, expenses, summary
-
-load_dotenv()
 
 app = FastAPI(title="Receipt Expense Tracker API", version="1.0.0")
 

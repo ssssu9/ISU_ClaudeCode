@@ -1,24 +1,31 @@
-from fastapi import APIRouter, HTTPException
-from typing import Optional
-from datetime import date
 import json
 import os
+from typing import Optional
+from datetime import date
+
+from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
 
-DATA_FILE = os.getenv("DATA_FILE_PATH", "data/expenses.json")
+
+def _data_file() -> str:
+    return os.getenv("DATA_FILE_PATH", "backend/data/expenses.json")
 
 
 def _load() -> list:
-    if not os.path.exists(DATA_FILE):
+    path = _data_file()
+    if not os.path.exists(path):
         return []
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def _save(data: list) -> None:
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+    path = _data_file()
+    dir_path = os.path.dirname(path)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 

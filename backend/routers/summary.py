@@ -1,18 +1,22 @@
-from fastapi import APIRouter
-from typing import Optional
-from collections import defaultdict
 import json
 import os
+from collections import defaultdict
+from typing import Optional
+
+from fastapi import APIRouter
 
 router = APIRouter()
 
-DATA_FILE = os.getenv("DATA_FILE_PATH", "data/expenses.json")
+
+def _data_file() -> str:
+    return os.getenv("DATA_FILE_PATH", "backend/data/expenses.json")
 
 
 def _load() -> list:
-    if not os.path.exists(DATA_FILE):
+    path = _data_file()
+    if not os.path.exists(path):
         return []
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
