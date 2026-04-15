@@ -1,0 +1,42 @@
+# 환경 변수 (API 키 포함 - 절대 커밋 금지)
+.env
+.env.local
+.env.*.local
+
+# Python 가상환경
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Node.js
+node_modules/
+frontend/node_modules/
+
+# 빌드 결과물
+frontend/dist/
+frontend/.vite/
+
+# 운영체제
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code 내부 설정
+.claude/
+
+# 로그
+*.log
+logs/
